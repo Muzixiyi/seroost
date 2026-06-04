@@ -1,0 +1,17 @@
+use std::{
+    fs::{self, File},
+    io,
+    path::Path,
+};
+
+use crate::index::TermFreqIndex;
+
+pub fn write_index(index: &TermFreqIndex, path: &str) -> Result<(), io::Error> {
+    let path = Path::new(path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = File::create(path)?;
+    serde_json::to_writer_pretty(&file, index)?;
+    Ok(())
+}
