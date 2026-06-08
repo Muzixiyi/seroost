@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::Path};
 
 use crate::index::{TermFreqIndex, index_directory, read::read_index, write::write_index};
 use clap::{Parser, Subcommand};
@@ -18,6 +18,9 @@ enum Commands {
         /// The directory to index
         #[arg(short, long)]
         dir: String,
+        /// Recursively index subdirectories
+        #[arg(short, long)]
+        recursive: bool,
         /// The output file path
         #[arg(short, long, default_value = "indexes/index.json")]
         output: String,
@@ -33,9 +36,14 @@ fn main() -> Result<(), io::Error> {
     let args = Args::parse();
 
     match args.commands {
-        Commands::Index { dir, output } => {
+        Commands::Index {
+            dir,
+            recursive,
+            output,
+        } => {
             let mut term_freq_index = TermFreqIndex::new();
-            term_freq_index.extend(index_directory(&dir)?);
+            let dir_path = Path::new(&dir);
+            term_freq_index.extend(index_directory(&dir_path, recursive));
             write_index(&term_freq_index, &output)?;
             println!("Saved {}", output);
         }

@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io,
     path::{Path, PathBuf},
 };
 
@@ -96,21 +95,69 @@ pub fn index_document(content: &str) -> TermFreq {
         })
 }
 
-pub fn index_directory(dir_path: &str) -> Result<TermFreqIndex, io::Error> {
-    let entries = fs::read_dir(dir_path)?.collect::<Result<Vec<_>, _>>()?;
-    Ok(entries
-        .iter()
-        .filter_map(|entry| {
-            let file_path = entry.path();
+pub fn index_directory(dir_path: &Path, recursive: bool) -> HashMap<PathBuf, TermFreq> {
+    let mut term_freq_index = HashMap::new();
+    index_directory_impl(dir_path, recursive, &mut term_freq_index);
+    term_freq_index
+}
 
-            println!("Indexing {file_path:?}");
+pub fn index_directory_impl(
+    dir_path: &Path,
+    recursive: bool,
+    term_freq_index: &mut HashMap<PathBuf, TermFreq>,
+) {
+    if !dir_path.is_dir() {
+        eprintln!("{dir_path:?} is not dir, skip");
+        return;
+    }
 
-            if let Ok(content) = read_entire_xml_file(&file_path) {
-                Some((file_path, index_document(&content)))
-            } else {
-                eprintln!("Error reading file {file_path:?}: e");
+    let entries = fs::read_dir(dir_path)
+        .expect("Read dir failure")
+        .filter_map(|entry| match entry {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                eprintln!("Read entry failure: {:?}", e);
                 None
             }
-        })
-        .collect())
+        });
+
+    for entry in entries {
+        let path = entry.path();
+
+        if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.starts_with('.'))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        // 获取元数据，并且不自动追踪软链接
+        let is_symlink = path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+
+        if is_symlink {
+            eprintln!("Warning: {path:?} is a symlink, skipping to avoid infinite loops.");
+            continue;
+        }
+
+        if path.is_dir() {
+            if recursive {
+                index_directory_impl(&path, recursive, term_freq_index)
+            }
+        } else {
+            println!("Indexing {path:?}");
+            match read_entire_xml_file(&path) {
+                Ok(content) => {
+                    term_freq_index.insert(path, index_document(&content));
+                }
+                Err(e) => {
+                    eprintln!("Error reading file {path:?}: {e:?}");
+                }
+            }
+        }
+    }
 }
