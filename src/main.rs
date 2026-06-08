@@ -1,61 +1,11 @@
-use std::{io, path::Path};
+use crate::command::{Args, CommandError};
+use clap::Parser;
 
-use crate::index::{TermFreqIndex, index_directory, read::read_index, write::write_index};
-use clap::{Parser, Subcommand};
-
+mod command;
 mod index;
 
-#[derive(Debug, Parser)]
-struct Args {
-    #[command(subcommand)]
-    commands: Commands,
-}
-
-#[derive(Debug, Subcommand)]
-enum Commands {
-    /// Index a directory of XML files
-    Index {
-        /// The directory to index
-        #[arg(short, long)]
-        dir: String,
-        /// Recursively index subdirectories
-        #[arg(short, long)]
-        recursive: bool,
-        /// The output file path
-        #[arg(short, long, default_value = "indexes/index.json")]
-        output: String,
-    },
-    /// Read an index from a JSON file
-    Read {
-        #[arg(short, long)]
-        path: String,
-    },
-}
-
-fn main() -> Result<(), io::Error> {
+fn main() -> Result<(), CommandError> {
     let args = Args::parse();
-
-    match args.commands {
-        Commands::Index {
-            dir,
-            recursive,
-            output,
-        } => {
-            let mut term_freq_index = TermFreqIndex::new();
-            let dir_path = Path::new(&dir);
-            term_freq_index.extend(index_directory(&dir_path, recursive));
-            write_index(&term_freq_index, &output)?;
-            println!("Saved {}", output);
-        }
-        Commands::Read { path } => {
-            let term_freq_index = read_index(&path)?;
-
-            println!(
-                "{path} contains {count} files",
-                count = term_freq_index.len()
-            );
-        }
-    }
-
+    command::handle(args)?;
     Ok(())
 }

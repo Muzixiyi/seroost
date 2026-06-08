@@ -6,8 +6,7 @@ use std::{
 
 use crate::index::TermFreqIndex;
 
-pub fn write_index(index: &TermFreqIndex, path: &str) -> Result<(), io::Error> {
-    let path = Path::new(path);
+pub fn write_index(index: &TermFreqIndex, path: &Path) -> Result<(), io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
