@@ -33,9 +33,9 @@ fn read_entire_xml_file<P: AsRef<Path>>(file_path: P) -> Result<String, reader::
 }
 
 pub fn index_document(content: &str) -> TermFreq {
-    Lexer::new(content.chars().collect::<Vec<_>>().as_slice())
+    Lexer::new(content)
         .into_iter()
-        .map(|token| token.iter().map(|c| c.to_ascii_uppercase()).collect())
+        .map(|token| token.to_ascii_uppercase())
         .fold(HashMap::new(), |mut acc, term| {
             *acc.entry(term).or_insert(0) += 1;
             acc

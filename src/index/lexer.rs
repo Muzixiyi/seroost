@@ -1,53 +1,68 @@
+use std::{iter::Peekable, str::CharIndices};
+
 #[derive(Debug)]
 pub struct Lexer<'a> {
-    content: &'a [char],
+    content: &'a str,
+    char_indices: Peekable<CharIndices<'a>>,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(content: &'a [char]) -> Self {
-        Self { content }
+    pub fn new(content: &'a str) -> Self {
+        Self {
+            content,
+            char_indices: content.char_indices().peekable(),
+        }
     }
 
     fn trim_left(&mut self) {
-        while self.content.len() > 0 && self.content[0].is_whitespace() {
-            self.content = &self.content[1..];
+        while let Some(&(_, c)) = self.char_indices.peek()
+            && c.is_ascii_whitespace()
+        {
+            self.char_indices.next();
         }
     }
 
-    fn chop(&mut self, n: usize) -> &'a [char] {
-        let token = &self.content[0..n];
-        self.content = &self.content[n..];
-        token
-    }
-
-    fn chop_while(&mut self, predicate: impl Fn(&char) -> bool) -> &'a [char] {
-        let mut n = 0;
-        while n < self.content.len() && predicate(&self.content[n]) {
-            n += 1;
-        }
-        self.chop(n)
-    }
-
-    fn next_token(&mut self) -> Option<&'a [char]> {
-        self.trim_left();
-        if self.content.len() == 0 {
+    fn chop_while(&mut self, predicate: impl Fn(char) -> bool) -> Option<&'a str> {
+        let &(start_index, c) = self.char_indices.peek()?;
+        if !predicate(c) {
             return None;
         }
-
-        if self.content[0].is_numeric() {
-            return Some(self.chop_while(|x| x.is_numeric()));
+        while let Some(&(_, c)) = self.char_indices.peek()
+            && predicate(c)
+        {
+            self.char_indices.next();
         }
 
-        if self.content[0].is_alphabetic() {
-            return Some(self.chop_while(|x| x.is_alphanumeric()));
+        let end_index = self
+            .char_indices
+            .peek()
+            .map(|&(index, _)| index)
+            .unwrap_or(self.content.len());
+
+        Some(&self.content[start_index..end_index])
+    }
+
+    fn next_token(&mut self) -> Option<&'a str> {
+        self.trim_left();
+
+        let &(_, c) = self.char_indices.peek()?;
+
+        if c.is_numeric() {
+            return self.chop_while(|x| x.is_numeric());
         }
 
-        Some(self.chop(1))
+        if c.is_alphabetic() {
+            return self.chop_while(|x| x.is_alphanumeric());
+        }
+
+        self.char_indices
+            .next()
+            .map(|(index, c)| &self.content[index..index + c.len_utf8()])
     }
 }
 
 impl<'a> Iterator for Lexer<'a> {
-    type Item = &'a [char];
+    type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
