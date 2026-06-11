@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod command;
 mod index;
+mod search;
 
 fn main() -> Result<(), CommandError> {
     let args = Args::parse();
