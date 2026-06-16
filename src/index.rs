@@ -18,7 +18,7 @@ pub mod write;
 pub type TermFreq = HashMap<String, usize>;
 pub type TermFreqIndex = HashMap<PathBuf, TermFreq>;
 
-fn read_entire_xml_file<P: AsRef<Path>>(file_path: P) -> Result<String, reader::Error> {
+fn extract_text_from_xml<P: AsRef<Path>>(file_path: P) -> Result<String, reader::Error> {
     let file = File::open(file_path)?;
     let event_reader = EventReader::new(file);
 
@@ -32,23 +32,32 @@ fn read_entire_xml_file<P: AsRef<Path>>(file_path: P) -> Result<String, reader::
     Ok(content)
 }
 
-pub fn index_document(content: &str) -> TermFreq {
+pub fn compute_term_freq(content: &str, to_term: impl Fn(&str) -> String) -> TermFreq {
     Lexer::new(content)
         .into_iter()
-        .map(|token| token.to_ascii_uppercase())
+        .map(to_term)
         .fold(HashMap::new(), |mut acc, term| {
             *acc.entry(term).or_insert(0) += 1;
             acc
         })
 }
 
-pub fn index_directory(dir_path: &Path, recursive: bool) -> TermFreqIndex {
+pub fn index_directory(
+    dir_path: &Path,
+    recursive: bool,
+    to_term: impl Fn(&str) -> String,
+) -> TermFreqIndex {
     let mut term_freq_index = HashMap::new();
-    index_directory_impl(dir_path, recursive, &mut term_freq_index);
+    index_directory_rec(dir_path, recursive, &mut term_freq_index, &to_term);
     term_freq_index
 }
 
-fn index_directory_impl(dir_path: &Path, recursive: bool, term_freq_index: &mut TermFreqIndex) {
+fn index_directory_rec(
+    dir_path: &Path,
+    recursive: bool,
+    term_freq_index: &mut TermFreqIndex,
+    to_term: &impl Fn(&str) -> String,
+) {
     if !dir_path.is_dir() {
         eprintln!("{dir_path:?} is not dir, skip");
         return;
@@ -89,13 +98,13 @@ fn index_directory_impl(dir_path: &Path, recursive: bool, term_freq_index: &mut 
 
         if path.is_dir() {
             if recursive {
-                index_directory_impl(&path, recursive, term_freq_index)
+                index_directory_rec(&path, recursive, term_freq_index, to_term)
             }
         } else {
             println!("Indexing {path:?}");
-            match read_entire_xml_file(&path) {
+            match extract_text_from_xml(&path) {
                 Ok(content) => {
-                    term_freq_index.insert(path, index_document(&content));
+                    term_freq_index.insert(path, compute_term_freq(&content, to_term));
                 }
                 Err(e) => {
                     eprintln!("Error reading file {path:?}: {e:?}");
