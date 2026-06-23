@@ -7,7 +7,7 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 use thiserror::Error;
-use tiny_http::{Method, Request, Response, Server, StatusCode};
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::{
     index::{TermFreqIndex, index_directory, read::read_index, write::write_index},
@@ -161,12 +161,24 @@ fn serve_request(searcher: &impl Searcher, mut request: Request, strategy: TermS
 
             let result = searcher.search(&body, strategy.processor());
 
-            for (path, rank) in result.iter().take(30) {
-                println!("{path} => {rank}", path = path.display());
-            }
+            let result_json =
+                match serde_json::to_string(&result.iter().take(30).collect::<Vec<_>>()) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        eprintln!("ERROR: could not serialize result: {e}");
+                        return;
+                    }
+                };
 
             request
-                .respond(Response::from_string("ok"))
+                .respond(
+                    Response::from_string(result_json).with_header(
+                        Header::from_bytes(b"Content-Type", b"application/json;charset=utf-8")
+                            .expect(
+                                "ERROR: failed to create Content-Type header from static bytes",
+                            ),
+                    ),
+                )
                 .expect("ERROR: respond failure");
         }
         (Method::Get, "/" | "/index.html") => serve_static_file(request, "static/index.html"),
