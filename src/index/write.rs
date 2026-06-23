@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File},
-    io,
+    io::{self, BufWriter},
     path::Path,
 };
 
@@ -11,6 +11,6 @@ pub fn write_index(index: &TermFreqIndex, path: &Path) -> Result<(), io::Error> 
         fs::create_dir_all(parent)?;
     }
     let file = File::create(path)?;
-    serde_json::to_writer_pretty(&file, index)?;
+    serde_json::to_writer_pretty(BufWriter::new(file), index)?;
     Ok(())
 }

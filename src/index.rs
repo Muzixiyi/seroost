@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
+    io::BufReader,
     path::{Path, PathBuf},
 };
 
@@ -20,7 +21,7 @@ pub type TermFreqIndex = HashMap<PathBuf, TermFreq>;
 
 fn extract_text_from_xml<P: AsRef<Path>>(file_path: P) -> Result<String, reader::Error> {
     let file = File::open(file_path)?;
-    let event_reader = EventReader::new(file);
+    let event_reader = EventReader::new(BufReader::new(file));
 
     let mut content = String::new();
     for event in event_reader {
