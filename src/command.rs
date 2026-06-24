@@ -10,7 +10,7 @@ use thiserror::Error;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::{
-    index::{TermFreqIndex, index_directory, read::read_index, write::write_index},
+    index::{index_directory, read::read_index, write::write_index},
     search::{BM25Searcher, Searcher},
 };
 
@@ -104,12 +104,12 @@ fn handle_index(
     output: &str,
     strategy: TermStrategy,
 ) -> Result<(), CommandError> {
-    let mut term_freq_indexes = TermFreqIndex::new();
     let dir_path = Path::new(&dir);
     let output = Path::new(output);
 
-    term_freq_indexes.extend(index_directory(&dir_path, recursive, strategy.processor()));
-    write_index(&term_freq_indexes, &output)?;
+    let model = index_directory(&dir_path, recursive, strategy.processor());
+
+    write_index(&model, &output)?;
     println!("Saved {:?}", output);
 
     Ok(())
@@ -117,12 +117,9 @@ fn handle_index(
 
 fn handle_read(path: &str) -> Result<(), CommandError> {
     let path = Path::new(path);
-    let term_freq_indexes = read_index(&path)?;
+    let model = read_index(&path)?;
 
-    println!(
-        "{path:?} contains {count} files",
-        count = term_freq_indexes.len()
-    );
+    println!("{path:?} contains {count} files", count = model.doc_count);
 
     Ok(())
 }
@@ -134,14 +131,14 @@ fn handle_serve(
     strategy: TermStrategy,
 ) -> Result<(), CommandError> {
     let path = Path::new(index_path);
-    let tf_idf_searcher = BM25Searcher::new(read_index(&path)?);
+    let searcher = BM25Searcher::new(read_index(&path)?);
 
     let server =
         Server::http(SocketAddrV4::new(addr, port)).expect("ERROR: cound not start HTTP server");
     println!("INFO: listening at http://127.0.0.1:{port}");
     loop {
         let request = server.recv().expect("ERROR: receive request failure");
-        serve_request(&tf_idf_searcher, request, strategy);
+        serve_request(&searcher, request, strategy);
     }
 }
 

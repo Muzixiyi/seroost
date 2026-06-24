@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::index::{TermFreqIndex, lexer::Lexer};
+use crate::index::{Model, compute_term_freq};
 
 pub trait Searcher {
     fn search<'a>(
@@ -12,26 +12,20 @@ pub trait Searcher {
 
 /// Searcher implementation for searching using TF-IDF algorithm.
 pub struct TfIdfSearcher {
-    pub indexes: TermFreqIndex,
+    pub model: Model,
 }
 
 impl TfIdfSearcher {
-    pub fn new(term_freq_indexes: TermFreqIndex) -> Self {
-        TfIdfSearcher {
-            indexes: term_freq_indexes,
-        }
+    pub fn new(model: Model) -> Self {
+        TfIdfSearcher { model }
     }
 
     fn idf(&self, term: &str) -> f32 {
-        let n = self.indexes.len() as f32;
+        let n = self.model.doc_count as f32;
         if n == 0.0 {
             return 0.0;
         }
-        let doc_count = self
-            .indexes
-            .values()
-            .filter(|term_freq| term_freq.contains_key(term))
-            .count() as f32;
+        let doc_count = self.model.doc_freq.get(term).copied().unwrap_or(0) as f32;
         ((n + 1.0) / (doc_count + 1.0)).ln() + 1.0
     }
 }
@@ -42,26 +36,29 @@ impl Searcher for TfIdfSearcher {
         keywords: &str,
         strategy: impl Fn(&str) -> String,
     ) -> Vec<(&'a PathBuf, f32)> {
-        let keywords = strategy(keywords);
-
-        let idfs = Lexer::new(&keywords)
-            .map(|token| (token, self.idf(&token)))
+        let term_freq = compute_term_freq(&keywords, strategy);
+        let query_terms = term_freq
+            .into_iter()
+            .map(|(token, qtf)| {
+                let idf = self.idf(&token);
+                let qtf_score = 1.0 + (qtf as f32).ln();
+                (token, idf, qtf_score)
+            })
             .collect::<Vec<_>>();
-
         let mut result = Vec::new();
 
-        for (path, term_freq_table) in &self.indexes {
-            let total_terms = term_freq_table.values().sum::<usize>();
-            if total_terms == 0 {
+        for (path, doc_info) in &self.model.docs {
+            let doc_term_count = doc_info.term_count;
+            if doc_term_count == 0 {
                 continue;
             }
-            let total_terms = total_terms as f32;
+            let doc_term_count = doc_term_count as f32;
 
             let mut rank = 0f32;
-            for (token, idf) in &idfs {
-                if let Some(&count) = term_freq_table.get(*token) {
-                    let tf = count as f32 / total_terms;
-                    rank += tf * idf;
+            for (token, idf, qtf_score) in &query_terms {
+                if let Some(&count) = doc_info.term_freq.get(token) {
+                    let tf = count as f32 / doc_term_count;
+                    rank += tf * idf * qtf_score;
                 }
             }
 
@@ -78,28 +75,19 @@ impl Searcher for TfIdfSearcher {
 
 /// Searcher implementation for searching using BM25 algorithm.
 pub struct BM25Searcher {
-    indexes: TermFreqIndex,
-    avg_doc_len: f32,
+    model: Model,
     k1: f32,
     b: f32,
+    k3: f32,
 }
 
 impl BM25Searcher {
-    pub fn new(indexes: TermFreqIndex) -> Self {
-        let avg_doc_len = if indexes.len() == 0 {
-            0.0
-        } else {
-            indexes
-                .values()
-                .map(|tf| tf.values().sum::<usize>() as f32)
-                .sum::<f32>()
-                / indexes.len() as f32
-        };
+    pub fn new(model: Model) -> Self {
         Self {
-            indexes,
-            avg_doc_len,
+            model,
             k1: 1.5,
             b: 0.75,
+            k3: 1.2,
         }
     }
 
@@ -113,16 +101,17 @@ impl BM25Searcher {
         self
     }
 
+    pub fn with_k3(mut self, k3: f32) -> Self {
+        self.k3 = k3;
+        self
+    }
+
     fn idf(&self, term: &str) -> f32 {
-        let total_docs = self.indexes.len() as f32;
+        let total_docs = self.model.doc_count as f32;
         if total_docs == 0.0 {
             return 0.0;
         }
-        let doc_count = self
-            .indexes
-            .values()
-            .filter(|term_freq| term_freq.contains_key(term))
-            .count() as f32;
+        let doc_count = self.model.doc_freq.get(term).copied().unwrap_or(0) as f32;
 
         ((total_docs - doc_count + 0.5) / (doc_count + 0.5) + 1.0).ln()
     }
@@ -134,24 +123,32 @@ impl Searcher for BM25Searcher {
         keywords: &str,
         strategy: impl Fn(&str) -> String,
     ) -> Vec<(&'a PathBuf, f32)> {
-        let keywords = strategy(keywords);
-
-        let idfs = Lexer::new(&keywords)
-            .map(|token| (token, self.idf(&token)))
+        let term_freq = compute_term_freq(&keywords, strategy);
+        let query_terms = term_freq
+            .into_iter()
+            .map(|(token, qtf)| {
+                let idf = self.idf(&token);
+                let qtf = qtf as f32;
+                let qtf_score = (self.k3 + 1.0) * qtf / (self.k3 + qtf);
+                (token, idf, qtf_score)
+            })
             .collect::<Vec<_>>();
 
         let mut result = Vec::new();
 
-        for (path, term_freq_table) in &self.indexes {
-            let doc_len = term_freq_table.values().sum::<usize>() as f32;
+        for (path, doc_info) in &self.model.docs {
+            let doc_term_count = doc_info.term_count as f32;
 
             let mut rank = 0f32;
-            for (token, idf) in &idfs {
-                if let Some(&count) = term_freq_table.get(*token) {
+            for (token, idf, qtf_score) in &query_terms {
+                if let Some(&count) = doc_info.term_freq.get(token) {
                     let tf = count as f32;
                     let tf_score = tf * (self.k1 + 1.0)
-                        / (tf + self.k1 * (1.0 - self.b + self.b * doc_len / self.avg_doc_len));
-                    rank += tf_score * idf;
+                        / (tf
+                            + self.k1
+                                * (1.0 - self.b
+                                    + self.b * doc_term_count / self.model.avg_term_count));
+                    rank += tf_score * idf * qtf_score;
                 }
             }
 

@@ -4,13 +4,13 @@ use std::{
     path::Path,
 };
 
-use crate::index::TermFreqIndex;
+use crate::index::Model;
 
-pub fn write_index(index: &TermFreqIndex, path: &Path) -> Result<(), io::Error> {
+pub fn write_index(model: &Model, path: &Path) -> Result<(), io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let file = File::create(path)?;
-    serde_json::to_writer_pretty(BufWriter::new(file), index)?;
+    serde_json::to_writer_pretty(BufWriter::new(file), model)?;
     Ok(())
 }
