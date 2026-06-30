@@ -1,12 +1,15 @@
 use std::path::PathBuf;
 
-use crate::index::{Model, compute_term_freq};
+use crate::{
+    index::{Model, compute_term_freq},
+    term_processor::TermProcessor,
+};
 
 pub trait Searcher {
     fn search<'a>(
         &'a self,
         keywords: &str,
-        strategy: impl Fn(&str) -> String,
+        term_processor: &impl TermProcessor,
     ) -> Vec<(&'a PathBuf, f32)>;
 }
 
@@ -34,9 +37,9 @@ impl Searcher for TfIdfSearcher {
     fn search<'a>(
         &'a self,
         keywords: &str,
-        strategy: impl Fn(&str) -> String,
+        term_processor: &impl TermProcessor,
     ) -> Vec<(&'a PathBuf, f32)> {
-        let term_freq = compute_term_freq(&keywords, strategy);
+        let term_freq = compute_term_freq(&keywords, term_processor);
         let query_terms = term_freq
             .into_iter()
             .map(|(token, qtf)| {
@@ -121,9 +124,9 @@ impl Searcher for BM25Searcher {
     fn search<'a>(
         &'a self,
         keywords: &str,
-        strategy: impl Fn(&str) -> String,
+        term_processor: &impl TermProcessor,
     ) -> Vec<(&'a PathBuf, f32)> {
-        let term_freq = compute_term_freq(&keywords, strategy);
+        let term_freq = compute_term_freq(&keywords, term_processor);
         let query_terms = term_freq
             .into_iter()
             .map(|(token, qtf)| {

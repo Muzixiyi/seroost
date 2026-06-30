@@ -8,10 +8,12 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use thiserror::Error;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use waken_snowball::Algorithm;
 
 use crate::{
     index::{index_directory, read::read_index, write::write_index},
     search::{BM25Searcher, Searcher},
+    term_processor::{Lowercase, Processor, Raw, Stemming, TermProcessor, Uppercase},
 };
 
 #[derive(Debug, Error)]
@@ -67,14 +69,19 @@ pub enum TermStrategy {
     Raw,
     Lowercase,
     Uppercase,
+    /// Convert term to lowercase for better matching, as the stemmer cannot handle uppercase words
+    Stemming,
 }
 
 impl TermStrategy {
-    pub fn processor(&self) -> fn(&str) -> String {
+    pub fn processor(&self) -> Processor {
         match self {
-            TermStrategy::Raw => |s| s.to_string(),
-            TermStrategy::Lowercase => |s| s.to_lowercase(),
-            TermStrategy::Uppercase => |s| s.to_ascii_uppercase(),
+            TermStrategy::Raw => Processor::Raw(Raw::default()),
+            TermStrategy::Lowercase => Processor::Lowercase(Lowercase::default()),
+            TermStrategy::Uppercase => Processor::Uppercase(Uppercase::default()),
+            TermStrategy::Stemming => {
+                Processor::Stemming(Stemming::new(Algorithm::English.stemmer()))
+            }
         }
     }
 }
@@ -86,14 +93,19 @@ pub fn handle(args: Args) -> Result<(), CommandError> {
             recursive,
             output,
             strategy,
-        } => handle_index(&dir, recursive, &output, strategy)?,
+        } => handle_index(&dir, recursive, &output, strategy.processor())?,
 
         Commands::Read { path } => handle_read(&path)?,
         Commands::Serve {
             index_path,
             port,
             strategy,
-        } => handle_serve(&index_path, Ipv4Addr::new(127, 0, 0, 1), port, strategy)?,
+        } => handle_serve(
+            &index_path,
+            Ipv4Addr::new(127, 0, 0, 1),
+            port,
+            strategy.processor(),
+        )?,
     }
     Ok(())
 }
@@ -102,12 +114,12 @@ fn handle_index(
     dir: &str,
     recursive: bool,
     output: &str,
-    strategy: TermStrategy,
+    term_processor: impl TermProcessor,
 ) -> Result<(), CommandError> {
     let dir_path = Path::new(&dir);
     let output = Path::new(output);
 
-    let model = index_directory(&dir_path, recursive, strategy.processor());
+    let model = index_directory(&dir_path, recursive, &term_processor);
 
     write_index(&model, &output)?;
     println!("Saved {:?}", output);
@@ -128,7 +140,7 @@ fn handle_serve(
     index_path: &str,
     addr: Ipv4Addr,
     port: u16,
-    strategy: TermStrategy,
+    term_processor: impl TermProcessor,
 ) -> Result<(), CommandError> {
     let path = Path::new(index_path);
     let searcher = BM25Searcher::new(read_index(&path)?);
@@ -138,11 +150,15 @@ fn handle_serve(
     println!("INFO: listening at http://127.0.0.1:{port}");
     loop {
         let request = server.recv().expect("ERROR: receive request failure");
-        serve_request(&searcher, request, strategy);
+        serve_request(&searcher, request, &term_processor);
     }
 }
 
-fn serve_request(searcher: &impl Searcher, mut request: Request, strategy: TermStrategy) {
+fn serve_request(
+    searcher: &impl Searcher,
+    mut request: Request,
+    term_processor: &impl TermProcessor,
+) {
     println!(
         "INFO: received request! method: {:?}, url: {:?}",
         request.method(),
@@ -156,7 +172,7 @@ fn serve_request(searcher: &impl Searcher, mut request: Request, strategy: TermS
                 .read_to_string(&mut body)
                 .expect("ERROR: cound not read body");
 
-            let result = searcher.search(&body, strategy.processor());
+            let result = searcher.search(&body, term_processor);
 
             let result_json =
                 match serde_json::to_string(&result.iter().take(30).collect::<Vec<_>>()) {

@@ -11,7 +11,7 @@ use xml::{
     reader::{self, XmlEvent},
 };
 
-use crate::index::lexer::Lexer;
+use crate::{index::lexer::Lexer, term_processor::TermProcessor};
 
 pub mod lexer;
 pub mod read;
@@ -50,12 +50,12 @@ fn extract_text_from_xml<P: AsRef<Path>>(file_path: P) -> Result<String, reader:
     Ok(content)
 }
 
-pub fn compute_term_freq(content: &str, to_term: impl Fn(&str) -> String) -> TermFreq {
+pub fn compute_term_freq(content: &str, term_processor: &impl TermProcessor) -> TermFreq {
     Lexer::new(content)
         .into_iter()
-        .map(to_term)
+        .map(|s| term_processor.process(s))
         .fold(HashMap::new(), |mut acc, term| {
-            *acc.entry(term).or_insert(0) += 1;
+            *acc.entry(term.into_owned()).or_insert(0) += 1;
             acc
         })
 }
@@ -63,10 +63,10 @@ pub fn compute_term_freq(content: &str, to_term: impl Fn(&str) -> String) -> Ter
 pub fn index_directory(
     dir_path: &Path,
     recursive: bool,
-    to_term: impl Fn(&str) -> String,
+    term_processor: &impl TermProcessor,
 ) -> Model {
     let mut model = Model::default();
-    index_directory_rec(dir_path, recursive, &mut model, &to_term);
+    index_directory_rec(dir_path, recursive, &mut model, term_processor);
     model.avg_term_count = if model.doc_count == 0 {
         0.0
     } else {
@@ -79,7 +79,7 @@ fn index_directory_rec(
     dir_path: &Path,
     recursive: bool,
     model: &mut Model,
-    to_term: &impl Fn(&str) -> String,
+    term_processor: &impl TermProcessor,
 ) {
     if !dir_path.is_dir() {
         eprintln!("{dir_path:?} is not dir, skip");
@@ -121,13 +121,13 @@ fn index_directory_rec(
 
         if path.is_dir() {
             if recursive {
-                index_directory_rec(&path, recursive, model, to_term)
+                index_directory_rec(&path, recursive, model, term_processor)
             }
         } else {
             println!("Indexing {path:?}");
             match extract_text_from_xml(&path) {
                 Ok(content) => {
-                    let term_freq = compute_term_freq(&content, to_term);
+                    let term_freq = compute_term_freq(&content, term_processor);
                     for term in term_freq.keys() {
                         let entry = model.doc_freq.entry(term.clone()).or_insert(0);
                         *entry += 1;
