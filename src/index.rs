@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     fs::{self, File},
     io::BufReader,
     path::{Path, PathBuf},
@@ -36,6 +37,14 @@ pub struct DocInfo {
     pub term_freq: TermFreq,
 }
 
+fn extract_text_from_txt<P: AsRef<Path>>(file_path: P) -> Result<String, std::io::Error> {
+    fs::read_to_string(file_path)
+}
+
+fn extract_text_from_pdf<P: AsRef<Path>>(file_path: P) -> Result<String, pdf_extract::OutputError> {
+    pdf_extract::extract_text(file_path)
+}
+
 fn extract_text_from_xml<P: AsRef<Path>>(file_path: P) -> Result<String, reader::Error> {
     let file = File::open(file_path)?;
     let event_reader = EventReader::new(BufReader::new(file));
@@ -48,6 +57,48 @@ fn extract_text_from_xml<P: AsRef<Path>>(file_path: P) -> Result<String, reader:
         }
     }
     Ok(content)
+}
+
+fn extract_text_from_file_by_extensions<P: AsRef<Path>>(file_path: P) -> Option<String> {
+    let file_path = file_path.as_ref();
+    let extension = file_path
+        .extension()
+        .map(|s| s.to_string_lossy().to_lowercase());
+
+    let handle_err = |ext: &str, err: &dyn Display| {
+        eprintln!(
+            "ERROR: Failed to read {} file {}: {}",
+            ext.to_uppercase(),
+            file_path.display(),
+            err
+        );
+    };
+    match extension.as_deref() {
+        Some("txt") => extract_text_from_txt(file_path)
+            .inspect_err(|e| handle_err("txt", e))
+            .ok(),
+        Some("pdf") => extract_text_from_pdf(file_path)
+            .inspect_err(|e| handle_err("pdf", e))
+            .ok(),
+        Some("xhtml" | "html" | "xml") => extract_text_from_xml(file_path)
+            .inspect_err(|e| handle_err("xml", e))
+            .ok(),
+        Some(ext) => {
+            eprintln!(
+                "ERROR: can't detect file type of {file_path}: unsupported extension {extension}",
+                file_path = file_path.display(),
+                extension = ext
+            );
+            None
+        }
+        None => {
+            eprintln!(
+                "ERROR: can't detect file type of {file_path} without extension",
+                file_path = file_path.display()
+            );
+            None
+        }
+    }
 }
 
 pub fn compute_term_freq(content: &str, term_processor: &impl TermProcessor) -> TermFreq {
@@ -125,8 +176,8 @@ fn index_directory_rec(
             }
         } else {
             println!("Indexing {path:?}");
-            match extract_text_from_xml(&path) {
-                Ok(content) => {
+            match extract_text_from_file_by_extensions(&path) {
+                Some(content) => {
                     let term_freq = compute_term_freq(&content, term_processor);
                     for term in term_freq.keys() {
                         let entry = model.doc_freq.entry(term.clone()).or_insert(0);
@@ -143,10 +194,39 @@ fn index_directory_rec(
                         },
                     );
                 }
-                Err(e) => {
-                    eprintln!("Error reading file {path:?}: {e:?}");
+                None => {
+                    eprintln!("Error reading file {path:?}");
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::index::{extract_text_from_pdf, extract_text_from_txt};
+
+    #[test]
+    fn test_extract_text_from_pdf() {
+        let path = std::path::Path::new("tests/fixtures/test.pdf");
+        assert_eq!(
+            "With great power comes great responsibility ^_~",
+            extract_text_from_pdf(&path)
+                .as_deref()
+                .map(|s| s.trim())
+                .unwrap_or("")
+        );
+    }
+
+    #[test]
+    fn test_extract_text_from_txt() {
+        let path = std::path::Path::new("tests/fixtures/test.txt");
+        assert_eq!(
+            "With great power comes great responsibility ^_~",
+            extract_text_from_txt(&path)
+                .as_deref()
+                .map(|s| s.trim())
+                .unwrap_or("")
+        );
     }
 }

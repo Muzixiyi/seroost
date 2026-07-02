@@ -73,9 +73,9 @@ pub enum TermStrategy {
     Stemming,
 }
 
-impl TermStrategy {
-    pub fn processor(&self) -> Processor {
-        match self {
+impl From<&TermStrategy> for Processor {
+    fn from(value: &TermStrategy) -> Self {
+        match value {
             TermStrategy::Raw => Processor::Raw(Raw::default()),
             TermStrategy::Lowercase => Processor::Lowercase(Lowercase::default()),
             TermStrategy::Uppercase => Processor::Uppercase(Uppercase::default()),
@@ -83,6 +83,12 @@ impl TermStrategy {
                 Processor::Stemming(Stemming::new(Algorithm::English.stemmer()))
             }
         }
+    }
+}
+
+impl TermStrategy {
+    pub fn processor(&self) -> Processor {
+        self.into()
     }
 }
 
