@@ -1,41 +1,23 @@
+use std::fmt::Display;
 use std::{
-    collections::HashMap,
-    fmt::Display,
     fs::{self, File},
     io::BufReader,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-use serde::{Deserialize, Serialize};
 use xml::{
     EventReader,
     reader::{self, XmlEvent},
 };
 
-use crate::{index::lexer::Lexer, term_processor::TermProcessor};
+use crate::index::model::Model;
+use crate::index::term_processor::TermProcessor;
 
 pub mod lexer;
+pub mod model;
 pub mod read;
+pub mod term_processor;
 pub mod write;
-
-pub type TermFreq = HashMap<String, usize>;
-pub type DocFreq = HashMap<String, usize>;
-pub type DocRegistry = HashMap<PathBuf, DocInfo>;
-
-#[derive(Default, Serialize, Deserialize)]
-pub struct Model {
-    pub doc_count: usize,
-    pub total_term_count: usize,
-    pub avg_term_count: f32,
-    pub doc_freq: DocFreq,
-    pub docs: DocRegistry,
-}
-
-#[derive(Default, Serialize, Deserialize)]
-pub struct DocInfo {
-    pub term_count: usize,
-    pub term_freq: TermFreq,
-}
 
 fn extract_text_from_txt<P: AsRef<Path>>(file_path: P) -> Result<String, std::io::Error> {
     fs::read_to_string(file_path)
@@ -101,16 +83,6 @@ fn extract_text_from_file_by_extensions<P: AsRef<Path>>(file_path: P) -> Option<
     }
 }
 
-pub fn compute_term_freq(content: &str, term_processor: &impl TermProcessor) -> TermFreq {
-    Lexer::new(content)
-        .into_iter()
-        .map(|s| term_processor.process(s))
-        .fold(HashMap::new(), |mut acc, term| {
-            *acc.entry(term.into_owned()).or_insert(0) += 1;
-            acc
-        })
-}
-
 pub fn index_directory(
     dir_path: &Path,
     recursive: bool,
@@ -118,11 +90,6 @@ pub fn index_directory(
 ) -> Model {
     let mut model = Model::default();
     index_directory_rec(dir_path, recursive, &mut model, term_processor);
-    model.avg_term_count = if model.doc_count == 0 {
-        0.0
-    } else {
-        (model.total_term_count as f32) / (model.doc_count as f32)
-    };
     model
 }
 
@@ -176,23 +143,16 @@ fn index_directory_rec(
             }
         } else {
             println!("Indexing {path:?}");
+            let last_modified = match path.metadata().and_then(|m| m.modified()) {
+                Ok(time) => time,
+                Err(err) => {
+                    eprintln!("ERROR: could not get the modification time for {path:?}: {err}");
+                    continue;
+                }
+            };
             match extract_text_from_file_by_extensions(&path) {
                 Some(content) => {
-                    let term_freq = compute_term_freq(&content, term_processor);
-                    for term in term_freq.keys() {
-                        let entry = model.doc_freq.entry(term.clone()).or_insert(0);
-                        *entry += 1;
-                    }
-                    let term_count = term_freq.values().sum::<usize>();
-                    model.doc_count += 1;
-                    model.total_term_count += term_count;
-                    model.docs.insert(
-                        path,
-                        DocInfo {
-                            term_count,
-                            term_freq,
-                        },
-                    );
+                    model.index_doc(path, last_modified, &content, term_processor);
                 }
                 None => {
                     eprintln!("Error reading file {path:?}");

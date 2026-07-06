@@ -11,9 +11,13 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use waken_snowball::Algorithm;
 
 use crate::{
-    index::{index_directory, read::read_index, write::write_index},
+    index::{
+        index_directory,
+        read::read_index,
+        term_processor::{Lowercase, Processor, Raw, Stemming, TermProcessor, Uppercase},
+        write::write_index,
+    },
     search::{BM25Searcher, Searcher},
-    term_processor::{Lowercase, Processor, Raw, Stemming, TermProcessor, Uppercase},
 };
 
 #[derive(Debug, Error)]
@@ -137,7 +141,7 @@ fn handle_read(path: &str) -> Result<(), CommandError> {
     let path = Path::new(path);
     let model = read_index(&path)?;
 
-    println!("{path:?} contains {count} files", count = model.doc_count);
+    println!("{path:?} contains {count} files", count = model.doc_count());
 
     Ok(())
 }

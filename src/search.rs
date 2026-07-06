@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::{
-    index::{Model, compute_term_freq},
+use crate::index::{
+    model::{Model, compute_term_freq},
     term_processor::TermProcessor,
 };
 
@@ -24,11 +24,11 @@ impl TfIdfSearcher {
     }
 
     fn idf(&self, term: &str) -> f32 {
-        let n = self.model.doc_count as f32;
+        let n = self.model.doc_count() as f32;
         if n == 0.0 {
             return 0.0;
         }
-        let doc_count = self.model.doc_freq.get(term).copied().unwrap_or(0) as f32;
+        let doc_count = self.model.doc_freq().get(term).copied().unwrap_or(0) as f32;
         ((n + 1.0) / (doc_count + 1.0)).ln() + 1.0
     }
 }
@@ -50,7 +50,7 @@ impl Searcher for TfIdfSearcher {
             .collect::<Vec<_>>();
         let mut result = Vec::new();
 
-        for (path, doc_info) in &self.model.docs {
+        for (path, doc_info) in self.model.docs() {
             let doc_term_count = doc_info.term_count;
             if doc_term_count == 0 {
                 continue;
@@ -110,11 +110,11 @@ impl BM25Searcher {
     }
 
     fn idf(&self, term: &str) -> f32 {
-        let total_docs = self.model.doc_count as f32;
+        let total_docs = self.model.doc_count() as f32;
         if total_docs == 0.0 {
             return 0.0;
         }
-        let doc_count = self.model.doc_freq.get(term).copied().unwrap_or(0) as f32;
+        let doc_count = self.model.doc_freq().get(term).copied().unwrap_or(0) as f32;
 
         ((total_docs - doc_count + 0.5) / (doc_count + 0.5) + 1.0).ln()
     }
@@ -139,7 +139,7 @@ impl Searcher for BM25Searcher {
 
         let mut result = Vec::new();
 
-        for (path, doc_info) in &self.model.docs {
+        for (path, doc_info) in self.model.docs() {
             let doc_term_count = doc_info.term_count as f32;
 
             let mut rank = 0f32;
@@ -150,7 +150,7 @@ impl Searcher for BM25Searcher {
                         / (tf
                             + self.k1
                                 * (1.0 - self.b
-                                    + self.b * doc_term_count / self.model.avg_term_count));
+                                    + self.b * doc_term_count / self.model.avg_term_count()));
                     rank += tf_score * idf * qtf_score;
                 }
             }
