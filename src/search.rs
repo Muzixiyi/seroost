@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use crate::index::{
     model::{Model, compute_term_freq},
@@ -6,51 +9,45 @@ use crate::index::{
 };
 
 pub trait Searcher {
-    fn search<'a>(
-        &'a self,
-        keywords: &str,
-        term_processor: &impl TermProcessor,
-    ) -> Vec<(&'a PathBuf, f32)>;
+    fn search(&self, keywords: &str, term_processor: &impl TermProcessor) -> Vec<(PathBuf, f32)>;
 }
 
 /// Searcher implementation for searching using TF-IDF algorithm.
 pub struct TfIdfSearcher {
-    pub model: Model,
+    pub model: Arc<RwLock<Model>>,
 }
 
 impl TfIdfSearcher {
-    pub fn new(model: Model) -> Self {
+    pub fn new(model: Arc<RwLock<Model>>) -> Self {
         TfIdfSearcher { model }
     }
 
-    fn idf(&self, term: &str) -> f32 {
-        let n = self.model.doc_count() as f32;
+    fn idf(model: &Model, term: &str) -> f32 {
+        let n = model.doc_count() as f32;
         if n == 0.0 {
             return 0.0;
         }
-        let doc_count = self.model.doc_freq().get(term).copied().unwrap_or(0) as f32;
+        let doc_count = model.doc_freq().get(term).copied().unwrap_or(0) as f32;
         ((n + 1.0) / (doc_count + 1.0)).ln() + 1.0
     }
 }
 
 impl Searcher for TfIdfSearcher {
-    fn search<'a>(
-        &'a self,
-        keywords: &str,
-        term_processor: &impl TermProcessor,
-    ) -> Vec<(&'a PathBuf, f32)> {
-        let term_freq = compute_term_freq(&keywords, term_processor);
+    fn search(&self, keywords: &str, term_processor: &impl TermProcessor) -> Vec<(PathBuf, f32)> {
+        let term_freq = compute_term_freq(keywords, term_processor);
+        let model = self.model.read().unwrap();
         let query_terms = term_freq
             .into_iter()
             .map(|(token, qtf)| {
-                let idf = self.idf(&token);
+                let idf = TfIdfSearcher::idf(&model, &token);
                 let qtf_score = 1.0 + (qtf as f32).ln();
                 (token, idf, qtf_score)
             })
             .collect::<Vec<_>>();
-        let mut result = Vec::new();
 
-        for (path, doc_info) in self.model.docs() {
+        let mut result = Vec::with_capacity(model.doc_count());
+
+        for (path, doc_info) in model.docs() {
             let doc_term_count = doc_info.term_count;
             if doc_term_count == 0 {
                 continue;
@@ -66,7 +63,7 @@ impl Searcher for TfIdfSearcher {
             }
 
             if rank > 0.0 {
-                result.push((path, rank));
+                result.push((path.clone(), rank));
             }
         }
 
@@ -78,14 +75,14 @@ impl Searcher for TfIdfSearcher {
 
 /// Searcher implementation for searching using BM25 algorithm.
 pub struct BM25Searcher {
-    model: Model,
+    model: Arc<RwLock<Model>>,
     k1: f32,
     b: f32,
     k3: f32,
 }
 
 impl BM25Searcher {
-    pub fn new(model: Model) -> Self {
+    pub fn new(model: Arc<RwLock<Model>>) -> Self {
         Self {
             model,
             k1: 1.5,
@@ -109,54 +106,55 @@ impl BM25Searcher {
         self
     }
 
-    fn idf(&self, term: &str) -> f32 {
-        let total_docs = self.model.doc_count() as f32;
+    fn idf(model: &Model, term: &str) -> f32 {
+        let total_docs = model.doc_count() as f32;
         if total_docs == 0.0 {
             return 0.0;
         }
-        let doc_count = self.model.doc_freq().get(term).copied().unwrap_or(0) as f32;
+        let doc_count = model.doc_freq().get(term).copied().unwrap_or(0) as f32;
 
         ((total_docs - doc_count + 0.5) / (doc_count + 0.5) + 1.0).ln()
     }
 }
 
 impl Searcher for BM25Searcher {
-    fn search<'a>(
-        &'a self,
-        keywords: &str,
-        term_processor: &impl TermProcessor,
-    ) -> Vec<(&'a PathBuf, f32)> {
-        let term_freq = compute_term_freq(&keywords, term_processor);
+    fn search(&self, keywords: &str, term_processor: &impl TermProcessor) -> Vec<(PathBuf, f32)> {
+        let term_freq = compute_term_freq(keywords, term_processor);
+
+        let model = self.model.read().unwrap();
+        let avg_term_count = model.avg_term_count();
         let query_terms = term_freq
             .into_iter()
             .map(|(token, qtf)| {
-                let idf = self.idf(&token);
+                let idf = BM25Searcher::idf(&model, &token);
                 let qtf = qtf as f32;
                 let qtf_score = (self.k3 + 1.0) * qtf / (self.k3 + qtf);
                 (token, idf, qtf_score)
             })
             .collect::<Vec<_>>();
 
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(model.doc_count());
 
-        for (path, doc_info) in self.model.docs() {
+        for (path, doc_info) in model.docs() {
             let doc_term_count = doc_info.term_count as f32;
 
             let mut rank = 0f32;
             for (token, idf, qtf_score) in &query_terms {
                 if let Some(&count) = doc_info.term_freq.get(token) {
                     let tf = count as f32;
-                    let tf_score = tf * (self.k1 + 1.0)
-                        / (tf
-                            + self.k1
-                                * (1.0 - self.b
-                                    + self.b * doc_term_count / self.model.avg_term_count()));
+                    let len_normalization = if avg_term_count > 0.0 {
+                        self.b * doc_term_count / avg_term_count
+                    } else {
+                        0.0
+                    };
+                    let tf_score =
+                        tf * (self.k1 + 1.0) / (tf + self.k1 * (1.0 - self.b + len_normalization));
                     rank += tf_score * idf * qtf_score;
                 }
             }
 
             if rank > 0.0 {
-                result.push((path, rank));
+                result.push((path.clone(), rank));
             }
         }
 

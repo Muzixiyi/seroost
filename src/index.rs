@@ -19,6 +19,14 @@ pub mod read;
 pub mod term_processor;
 pub mod write;
 
+#[derive(Default, Debug)]
+pub struct IndexStatisticsInfo {
+    pub total: usize,
+    pub indexed: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
 fn extract_text_from_txt<P: AsRef<Path>>(file_path: P) -> Result<String, std::io::Error> {
     fs::read_to_string(file_path)
 }
@@ -89,15 +97,24 @@ pub fn index_directory(
     term_processor: &impl TermProcessor,
 ) -> Model {
     let mut model = Model::default();
-    index_directory_rec(dir_path, recursive, &mut model, term_processor);
+    let mut statistics_info = IndexStatisticsInfo::default();
+    index_directory_rec(
+        dir_path,
+        recursive,
+        &mut model,
+        term_processor,
+        &mut statistics_info,
+    );
+    println!("{:?}", statistics_info);
     model
 }
 
-fn index_directory_rec(
+pub fn index_directory_rec(
     dir_path: &Path,
     recursive: bool,
     model: &mut Model,
     term_processor: &impl TermProcessor,
+    statistics_info: &mut IndexStatisticsInfo,
 ) {
     if !dir_path.is_dir() {
         eprintln!("{dir_path:?} is not dir, skip");
@@ -139,10 +156,10 @@ fn index_directory_rec(
 
         if path.is_dir() {
             if recursive {
-                index_directory_rec(&path, recursive, model, term_processor)
+                index_directory_rec(&path, recursive, model, term_processor, statistics_info);
             }
         } else {
-            println!("Indexing {path:?}");
+            statistics_info.total += 1;
             let last_modified = match path.metadata().and_then(|m| m.modified()) {
                 Ok(time) => time,
                 Err(err) => {
@@ -150,13 +167,21 @@ fn index_directory_rec(
                     continue;
                 }
             };
-            match extract_text_from_file_by_extensions(&path) {
-                Some(content) => {
-                    model.index_doc(path, last_modified, &content, term_processor);
+            if model.is_stale(&path, last_modified) {
+                match extract_text_from_file_by_extensions(&path) {
+                    Some(content) => {
+                        println!("Indexing {path:?}");
+                        model.index_doc(path, last_modified, &content, term_processor);
+                        statistics_info.indexed += 1;
+                    }
+                    None => {
+                        eprintln!("Error reading file {path:?}");
+                        statistics_info.failed += 1;
+                    }
                 }
-                None => {
-                    eprintln!("Error reading file {path:?}");
-                }
+            } else {
+                println!("Skipping {path:?}");
+                statistics_info.skipped += 1;
             }
         }
     }

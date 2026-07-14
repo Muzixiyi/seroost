@@ -1,18 +1,23 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     io,
     net::{Ipv4Addr, SocketAddrV4},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, RwLock, mpsc::channel},
+    thread,
+    time::Duration,
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
+use notify_debouncer_mini::new_debouncer;
 use thiserror::Error;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use waken_snowball::Algorithm;
 
 use crate::{
     index::{
-        index_directory,
+        IndexStatisticsInfo, index_directory, index_directory_rec,
+        model::Model,
         read::read_index,
         term_processor::{Lowercase, Processor, Raw, Stemming, TermProcessor, Uppercase},
         write::write_index,
@@ -24,6 +29,8 @@ use crate::{
 pub enum CommandError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
+    #[error("Notify error: {0}")]
+    Notify(#[from] notify::Error),
 }
 
 #[derive(Debug, Parser)]
@@ -55,9 +62,12 @@ pub enum Commands {
         path: String,
     },
     Serve {
-        /// Search from a index JSON file
-        #[arg(short, long, default_value = "indexes/index.json")]
-        index_path: String,
+        /// The directory to serve
+        #[arg(short, long)]
+        dir_path: String,
+        /// The name of the index file to use
+        #[arg(short, long, default_value = ".index.json")]
+        index_file_name: String,
         /// The server port
         #[arg(short, long, default_value = "6999")]
         port: u16,
@@ -107,11 +117,13 @@ pub fn handle(args: Args) -> Result<(), CommandError> {
 
         Commands::Read { path } => handle_read(&path)?,
         Commands::Serve {
-            index_path,
+            dir_path,
+            index_file_name,
             port,
             strategy,
         } => handle_serve(
-            &index_path,
+            &dir_path,
+            &index_file_name,
             Ipv4Addr::new(127, 0, 0, 1),
             port,
             strategy.processor(),
@@ -146,14 +158,97 @@ fn handle_read(path: &str) -> Result<(), CommandError> {
     Ok(())
 }
 
+fn reindex(
+    model: &RwLock<Model>,
+    dir_path: &Path,
+    index_path: &Path,
+    term_processor: &impl TermProcessor,
+) {
+    {
+        let mut model = model.write().unwrap();
+        println!("Starting reindex");
+        let mut statistics_info = IndexStatisticsInfo::default();
+        index_directory_rec(
+            &dir_path,
+            true,
+            &mut model,
+            term_processor,
+            &mut statistics_info,
+        );
+        println!("{:?}", statistics_info);
+    }
+    let model = model.read().unwrap();
+    if let Err(e) = write_index(&model, &index_path) {
+        eprintln!("ERROR: failed to write index: {:?}", e);
+    }
+}
+
 fn handle_serve(
-    index_path: &str,
+    dir_path: &str,
+    index_file_name: &str,
     addr: Ipv4Addr,
     port: u16,
-    term_processor: impl TermProcessor,
+    term_processor: impl TermProcessor + Send + 'static,
 ) -> Result<(), CommandError> {
-    let path = Path::new(index_path);
-    let searcher = BM25Searcher::new(read_index(&path)?);
+    let dir_path = Path::new(dir_path).to_path_buf();
+    if !dir_path.is_dir() {
+        return Err(CommandError::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "The directory path does not exist or is not a directory",
+        )));
+    }
+    println!("Serving directory: {dir_path:?}");
+    let index_path = dir_path.join(index_file_name);
+    let model = if index_path.exists() {
+        read_index(&index_path)?
+    } else {
+        fs::File::create(&index_path)?;
+        println!("INFO: created index file: {index_path:?}");
+
+        Model::default()
+    };
+
+    let model = Arc::new(RwLock::new(model));
+    let searcher = BM25Searcher::new(model.clone());
+    let (tx, rx) = channel();
+
+    let mut debouncer = new_debouncer(Duration::from_secs(1), tx)?;
+    debouncer
+        .watcher()
+        .watch(&dir_path, notify::RecursiveMode::Recursive)?;
+    println!("INFO: listening direction: {:?}", dir_path);
+
+    let raw_absolute_path = index_path
+        .canonicalize()
+        .unwrap_or_else(|_| index_path.clone());
+
+    let absolute_index_path = PathBuf::from(
+        raw_absolute_path
+            .to_string_lossy()
+            .strip_prefix(r#"\\?\"#)
+            .unwrap_or(&raw_absolute_path.to_string_lossy()),
+    );
+    let term_processor_clone = term_processor.clone();
+    thread::spawn(move || {
+        reindex(&model, &dir_path, &index_path, &term_processor_clone);
+
+        for res in rx {
+            match res {
+                Ok(events) => {
+                    for event in events {
+                        if event.path == absolute_index_path {
+                            continue;
+                        }
+
+                        println!("Listening file changed: {:?}", event);
+
+                        reindex(&model, &dir_path, &index_path, &term_processor_clone);
+                    }
+                }
+                Err(e) => eprintln!("Listening failure: {:?}", e),
+            }
+        }
+    });
 
     let server =
         Server::http(SocketAddrV4::new(addr, port)).expect("ERROR: cound not start HTTP server");

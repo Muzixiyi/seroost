@@ -1,9 +1,10 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
-pub trait TermProcessor {
+pub trait TermProcessor: Clone {
     fn process<'a>(&self, s: &'a str) -> Cow<'a, str>;
 }
 
+#[derive(Clone)]
 pub enum Processor {
     Raw(Raw),
     Lowercase(Lowercase),
@@ -21,7 +22,7 @@ impl TermProcessor for Processor {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct Raw;
 impl TermProcessor for Raw {
     fn process<'a>(&self, s: &'a str) -> Cow<'a, str> {
@@ -29,7 +30,7 @@ impl TermProcessor for Raw {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct Lowercase;
 impl TermProcessor for Lowercase {
     fn process<'a>(&self, s: &'a str) -> Cow<'a, str> {
@@ -41,7 +42,7 @@ impl TermProcessor for Lowercase {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct Uppercase;
 impl TermProcessor for Uppercase {
     fn process<'a>(&self, s: &'a str) -> Cow<'a, str> {
@@ -53,12 +54,15 @@ impl TermProcessor for Uppercase {
     }
 }
 
+#[derive(Clone)]
 pub struct Stemming {
-    pub stemmer: waken_snowball::Stemmer,
+    pub stemmer: Arc<waken_snowball::Stemmer>,
 }
 impl Stemming {
     pub fn new(stemmer: waken_snowball::Stemmer) -> Self {
-        Self { stemmer }
+        Self {
+            stemmer: Arc::new(stemmer),
+        }
     }
 }
 
